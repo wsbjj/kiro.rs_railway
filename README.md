@@ -166,6 +166,42 @@ docker-compose up
 
 需要将 `config.json` 和 `credentials.json` 挂载到容器中，具体参见 `docker-compose.yml`。
 
+### Railway
+
+`dev-railway` 分支已适配 Railway，项目 / 服务名统一为 **`kiro.rs_railway`**。整套部署不需要挂载配置文件，全部走环境变量。
+
+```bash
+railway login
+railway init --name kiro.rs_railway
+railway up
+```
+
+也可以直接在面板新建项目 → Deploy from GitHub repo → 选本仓库的 `dev-railway` 分支，Dockerfile 会被自动识别。
+
+在 Railway 面板的 **Variables** 中至少配置两个变量：
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `KIRO_API_KEY` | 是 | Kiro API Key，启动时自动注入为最高优先级凭据 |
+| `API_KEY` | 是 | 对外代理鉴权 Key，客户端调用 `/v1/messages` 时使用 |
+| `ADMIN_API_KEY` | 否 | 配置后启用 `/api/admin` 与 `/admin` 后台 |
+| `RUST_LOG` | 否 | 日志级别，默认 `info` |
+
+`PORT` 由 Railway 注入，`HOST` 由镜像固定为 `0.0.0.0`，两者都不用手动设置。
+
+部署完成后验证：
+
+```bash
+curl https://<分配的域名>/health   # 返回 ok
+```
+
+几个必须知道的点：
+
+- **只能单副本**。凭据刷新会回写 `credentials.json`，多副本之间会互相覆盖，Replicas 保持 1。
+- 需要持久化 OAuth 刷新后的 token，就在服务里挂一个 Volume 到 `/app/config`。不挂也能跑，但每次重启 OAuth 凭据会丢；用 `KIRO_API_KEY` 则不受影响。
+- 健康检查路径 `/health` 不鉴权，仅代表进程存活，不校验上游凭据是否可用。在服务 **Settings → Healthcheck Path** 填 `/health` 即可。
+- 仓库里**故意没有** `railway.toml` / `railway.json`：Railway 的 Config as Code 已弃用，新服务不再读取，2026-12-01 起彻底失效。构建走 Dockerfile 自动识别，其余配置在面板里设。
+
 ## 配置详解
 
 ### config.json
@@ -365,10 +401,19 @@ docker-compose up
 
 ### 环境变量
 
-可通过环境变量配置日志级别：
+环境变量优先级高于 `config.json`，空字符串视为未设置：
+
+| 变量 | 对应配置 | 说明 |
+|------|----------|------|
+| `HOST` | `host` | 监听地址；只设置 `PORT` 时自动取 `0.0.0.0` |
+| `PORT` | `port` | 监听端口，Railway / Render / Fly 等平台自动注入 |
+| `API_KEY` | `apiKey` | 对外代理鉴权 Key |
+| `ADMIN_API_KEY` | `adminApiKey` | Admin API Key，配置后启用后台 |
+| `KIRO_API_KEY` | 凭据 | Kiro API Key，作为最高优先级凭据注入 |
+| `RUST_LOG` | — | 日志级别，如 `debug` |
 
 ```bash
-RUST_LOG=debug ./target/release/kiro-rs
+RUST_LOG=debug API_KEY=sk-xxx ./target/release/kiro-rs
 ```
 
 ## API 端点

@@ -35,10 +35,13 @@ async fn main() {
     let config_path = args
         .config
         .unwrap_or_else(|| Config::default_config_path().to_string());
-    let config = Config::load(&config_path).unwrap_or_else(|e| {
+    let mut config = Config::load(&config_path).unwrap_or_else(|e| {
         tracing::error!("加载配置失败: {}", e);
         std::process::exit(1);
     });
+
+    // 环境变量覆盖（容器 / PaaS 平台部署场景）
+    config.apply_env_overrides();
 
     // 加载凭证（支持单对象或数组格式）
     let credentials_path = args
@@ -79,7 +82,7 @@ async fn main() {
 
     // 获取 API Key
     let api_key = config.api_key.clone().unwrap_or_else(|| {
-        tracing::error!("配置文件中未设置 apiKey");
+        tracing::error!("未设置 API Key：请在 config.json 中配置 apiKey，或设置环境变量 API_KEY");
         std::process::exit(1);
     });
 
@@ -195,11 +198,15 @@ async fn main() {
         anthropic_app
     };
 
+    // 健康检查端点（不鉴权，供 Railway / Docker / K8s 探活）
+    let app = app.route("/health", axum::routing::get(health));
+
     // 启动服务器
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("启动 Anthropic API 端点: {}", addr);
     tracing::info!("API Key: {}***", &api_key[..(api_key.len() / 2)]);
     tracing::info!("可用 API:");
+    tracing::info!("  GET  /health");
     tracing::info!("  GET  /v1/models");
     tracing::info!("  POST /v1/messages");
     tracing::info!("  POST /v1/messages/count_tokens");
@@ -216,4 +223,9 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+/// 健康检查：仅表示进程存活，不校验上游凭据是否可用
+async fn health() -> &'static str {
+    "ok"
 }

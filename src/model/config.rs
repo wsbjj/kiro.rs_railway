@@ -114,6 +114,14 @@ pub struct Config {
     config_path: Option<PathBuf>,
 }
 
+/// 读取非空环境变量（未设置 / 空白均视为 None）
+fn env_var_non_empty(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 fn default_host() -> String {
     "127.0.0.1".to_string()
 }
@@ -205,6 +213,42 @@ impl Config {
     /// 优先使用 api_region，未配置时回退到 region
     pub fn effective_api_region(&self) -> &str {
         self.api_region.as_deref().unwrap_or(&self.region)
+    }
+
+    /// 应用环境变量覆盖（容器 / PaaS 平台部署用）
+    ///
+    /// 优先级：环境变量 > 配置文件 > 内置默认值
+    ///
+    /// 支持的变量：
+    /// - `PORT`：监听端口（Railway / Render / Fly 等平台自动注入）
+    /// - `HOST`：监听地址；只设置 `PORT` 时自动切换为 `0.0.0.0`
+    /// - `API_KEY`：对外代理鉴权 Key（等价于 config.apiKey）
+    /// - `ADMIN_API_KEY`：Admin API Key（等价于 config.adminApiKey）
+    ///
+    /// 空字符串视为未设置，避免空值覆盖配置文件。
+    pub fn apply_env_overrides(&mut self) {
+        let port = env_var_non_empty("PORT").and_then(|v| v.parse::<u16>().ok());
+        let host = env_var_non_empty("HOST");
+
+        if let Some(port) = port {
+            self.port = port;
+            // 容器内必须监听所有网卡，否则端口映射 / 健康检查无法访问
+            if host.is_none() {
+                self.host = "0.0.0.0".to_string();
+            }
+        }
+
+        if let Some(host) = host {
+            self.host = host;
+        }
+
+        if let Some(key) = env_var_non_empty("API_KEY") {
+            self.api_key = Some(key);
+        }
+
+        if let Some(key) = env_var_non_empty("ADMIN_API_KEY") {
+            self.admin_api_key = Some(key);
+        }
     }
 
     /// 从文件加载配置

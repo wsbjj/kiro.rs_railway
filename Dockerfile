@@ -20,13 +20,20 @@ RUN cargo build --release --no-default-features
 
 FROM alpine:3.21
 
+LABEL org.opencontainers.image.title="kiro.rs_railway" \
+      org.opencontainers.image.description="Anthropic <-> Kiro API proxy, Railway 部署分支"
+
 RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 COPY --from=builder /app/target/release/kiro-rs /app/kiro-rs
 
+# 容器内必须监听所有网卡；PORT 由 Railway 等平台注入，不在此写死
+ENV HOST=0.0.0.0 \
+    RUST_LOG=info
+
 VOLUME ["/app/config"]
 
-EXPOSE 8990
+EXPOSE 8080
 
 CMD ["./kiro-rs", "-c", "/app/config/config.json", "--credentials", "/app/config/credentials.json"]

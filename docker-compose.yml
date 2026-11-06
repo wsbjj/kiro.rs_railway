@@ -1,13 +1,17 @@
 services:
-  kiro-rs:
+  kiro.rs_railway:
     # 使用国内镜像
-    # image: ghcr.nju.edu.cn/${IMAGE_OWNER:-hank9999}/kiro-rs:${IMAGE_TAG:-latest}
-    image: ghcr.io/${IMAGE_OWNER:-hank9999}/kiro-rs:${IMAGE_TAG:-latest}
-    container_name: kiro-rs
+    # image: ghcr.nju.edu.cn/${IMAGE_OWNER:-hank9999}/kiro.rs_railway:${IMAGE_TAG:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-hank9999}/kiro.rs_railway:${IMAGE_TAG:-latest}
+    container_name: kiro.rs_railway
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8990:8990"
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      # 环境变量优先级高于 config.json，固定容器内监听地址
+      HOST: 0.0.0.0
+      PORT: 8080
     volumes:
       - ./config/:/app/config/
     restart: unless-stopped

@@ -1,6 +1,6 @@
 # Rust build artifacts
+# Cargo.lock 需要进镜像：锁定依赖版本，保证 Railway / CI 构建可复现
 target/
-Cargo.lock
 
 # Node.js dependencies and build artifacts
 admin-ui/node_modules/
