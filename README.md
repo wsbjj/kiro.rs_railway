@@ -1,6 +1,36 @@
-# kiro-rs
+# kiro.rs_railway
 
-一个用 Rust 编写的 Anthropic Claude API 兼容代理服务，将 Anthropic API 请求转换为 Kiro API 请求。
+[kiro.rs](https://github.com/hank9999/kiro.rs) 的 **Railway 部署分支**。上游是一个用 Rust 编写的 Anthropic Claude API 兼容代理服务，把 Anthropic API 请求转换为 Kiro API 请求；本分支保留上游全部功能，只补齐 PaaS 部署所需的配置、健康检查与容器适配。
+
+> ### 来源与署名
+>
+> - **原作者**：[hank9999](https://github.com/hank9999) · 仓库 [hank9999/kiro.rs](https://github.com/hank9999/kiro.rs) · MIT License · Copyright (c) 2026 hank9999
+> - **本分支（Railway 适配）维护者**：[卜俊杰 @wsbjj](https://github.com/wsbjj)
+> - 上游提交历史完整保留，`master` 分支与上游保持一致、未做任何改动；所有适配改动都在 `dev-railway` 分支。
+> - 与 Railway 无关的用法问题（凭据、Region、模型映射、Troubleshooting）请优先查上游 Issue 与本文档下方章节。
+
+## 相对上游的改动
+
+| 改动 | 说明 |
+|------|------|
+| 环境变量覆盖配置 | `PORT` / `HOST` / `API_KEY` / `ADMIN_API_KEY` 优先级高于 `config.json`，空字符串视为未设置 |
+| `/health` 端点 | 不鉴权，仅表示进程存活，供 Railway / Docker / K8s 探活 |
+| Dockerfile | 容器内固定 `HOST=0.0.0.0`，暴露 `8080`，`PORT` 由平台注入；镜像标签改为 `kiro.rs_railway` |
+| `Cargo.lock` 进镜像 | 从 `.dockerignore` 移除，锁定依赖版本，保证平台构建可复现 |
+| docker-compose | 服务名 / 容器名 / 镜像名统一为 `kiro.rs_railway` |
+
+## 快速开始（Railway）
+
+```bash
+railway login
+railway init --name kiro.rs_railway   # 或在面板 Deploy from GitHub repo，选 dev-railway 分支
+railway up
+```
+
+面板 **Variables** 里至少要设 `KIRO_API_KEY` 和 `API_KEY` 两个变量，然后访问 `https://<你的域名>/health` 应返回 `ok`。
+完整步骤、环境变量表、必须知道的坑（单副本、Volume、健康检查）见 [Railway 部署](#railway)。
+
+本地跑还是老样子，见 [开始](#开始)；配置项细节见 [配置详解](#配置详解)。
 
 ---
 
@@ -193,6 +223,13 @@ railway up
 
 ```bash
 curl https://<分配的域名>/health   # 返回 ok
+```
+
+客户端接上来（以 Claude Code / Anthropic SDK 为例）：
+
+```bash
+export ANTHROPIC_BASE_URL=https://<分配的域名>   # 不要带 /v1，SDK 会自己拼路径
+export ANTHROPIC_AUTH_TOKEN=sk-你的-API_KEY      # 等价于 x-api-key
 ```
 
 几个必须知道的点：
@@ -589,6 +626,8 @@ kiro-rs/
 ## License
 
 MIT
+
+上游版权归 Copyright (c) 2026 [hank9999](https://github.com/hank9999) 所有；`dev-railway` 分支的适配改动同样以 MIT 发布。
 
 ## 致谢
 
