@@ -32,8 +32,9 @@ COPY --from=builder /app/target/release/kiro-rs /app/kiro-rs
 ENV HOST=0.0.0.0 \
     RUST_LOG=info
 
-VOLUME ["/app/config"]
-
+# 不声明 VOLUME：Railway 构建器直接拒绝 Dockerfile 里的 VOLUME 指令
+# （docker VOLUME at Line 35 is not supported, use Railway Volumes）
+# 需要持久化 token 时，在平台侧挂 Volume 到 /app/config
 EXPOSE 8080
 
 CMD ["./kiro-rs", "-c", "/app/config/config.json", "--credentials", "/app/config/credentials.json"]

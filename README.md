@@ -17,6 +17,7 @@
 | `/health` 端点 | 不鉴权，仅表示进程存活，供 Railway / Docker / K8s 探活 |
 | Dockerfile | 容器内固定 `HOST=0.0.0.0`，暴露 `8080`，`PORT` 由平台注入；镜像标签改为 `kiro.rs_railway` |
 | `Cargo.lock` 进镜像 | 从 `.dockerignore` 移除，锁定依赖版本，保证平台构建可复现 |
+| 去掉 Dockerfile 的 `VOLUME` | Railway 构建器不支持该指令（`docker VOLUME ... is not supported`），持久化改由平台侧 Volume 承担 |
 | docker-compose | 服务名 / 容器名 / 镜像名统一为 `kiro.rs_railway` |
 
 ## 快速开始（Railway）
@@ -235,7 +236,7 @@ export ANTHROPIC_AUTH_TOKEN=sk-你的-API_KEY      # 等价于 x-api-key
 几个必须知道的点：
 
 - **只能单副本**。凭据刷新会回写 `credentials.json`，多副本之间会互相覆盖，Replicas 保持 1。
-- 需要持久化 OAuth 刷新后的 token，就在服务里挂一个 Volume 到 `/app/config`。不挂也能跑，但每次重启 OAuth 凭据会丢；用 `KIRO_API_KEY` 则不受影响。
+- 需要持久化 OAuth 刷新后的 token，就在服务里挂一个 Volume 到 `/app/config`。不挂也能跑，但每次重启 OAuth 凭据会丢；用 `KIRO_API_KEY` 则不受影响。**Volume 必须在面板或 `railway volume add` 里挂**，Dockerfile 里写 `VOLUME` 会让构建直接失败。
 - 健康检查路径 `/health` 不鉴权，仅代表进程存活，不校验上游凭据是否可用。在服务 **Settings → Healthcheck Path** 填 `/health` 即可。
 - 仓库里**故意没有** `railway.toml` / `railway.json`：Railway 的 Config as Code 已弃用，新服务不再读取，2026-12-01 起彻底失效。构建走 Dockerfile 自动识别，其余配置在面板里设。
 
