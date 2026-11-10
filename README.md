@@ -448,6 +448,8 @@ export ANTHROPIC_AUTH_TOKEN=sk-你的-API_KEY      # 等价于 x-api-key
 | `API_KEY` | `apiKey` | 对外代理鉴权 Key |
 | `ADMIN_API_KEY` | `adminApiKey` | Admin API Key，配置后启用后台 |
 | `KIRO_API_KEY` | 凭据 | Kiro API Key，作为最高优先级凭据注入 |
+| `KIRO_VERSION` | `kiroVersion` | 上报给上游的 Kiro IDE 版本号。Kiro 官方会按版本号拦截旧客户端（2026-11-09 起低于 `0.11.133` 全部 403），升级时改这个变量即可，无需重新构建 |
+| `KIRO_REGION` | `region` | AWS 区域 |
 | `RUST_LOG` | — | 日志级别，如 `debug` |
 
 ```bash
