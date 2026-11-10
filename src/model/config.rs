@@ -135,7 +135,10 @@ fn default_region() -> String {
 }
 
 fn default_kiro_version() -> String {
-    "0.11.107".to_string()
+    // Kiro 官方自 2026-11-09 起拒绝 IDE < 0.11.133 的连接
+    // （403 FEATURE_NOT_SUPPORTED: This version of Kiro is no longer supported）
+    // 故默认值跟进当前 IDE 版本，可用环境变量 KIRO_VERSION 覆盖，无需重新编译
+    "1.4.121".to_string()
 }
 
 fn default_system_version() -> String {
@@ -224,6 +227,8 @@ impl Config {
     /// - `HOST`：监听地址；只设置 `PORT` 时自动切换为 `0.0.0.0`
     /// - `API_KEY`：对外代理鉴权 Key（等价于 config.apiKey）
     /// - `ADMIN_API_KEY`：Admin API Key（等价于 config.adminApiKey）
+    /// - `KIRO_VERSION`：上报给上游的 Kiro IDE 版本号（等价于 config.kiroVersion）
+    /// - `KIRO_REGION`：AWS 区域（等价于 config.region）
     ///
     /// 空字符串视为未设置，避免空值覆盖配置文件。
     pub fn apply_env_overrides(&mut self) {
@@ -248,6 +253,16 @@ impl Config {
 
         if let Some(key) = env_var_non_empty("ADMIN_API_KEY") {
             self.admin_api_key = Some(key);
+        }
+
+        // Kiro 侧会按版本号拦截旧客户端，官方渠道一升级就得跟着改
+        // 走环境变量可免重新构建，PaaS 上尤其需要
+        if let Some(version) = env_var_non_empty("KIRO_VERSION") {
+            self.kiro_version = version;
+        }
+
+        if let Some(region) = env_var_non_empty("KIRO_REGION") {
+            self.region = region;
         }
     }
 
