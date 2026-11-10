@@ -362,7 +362,9 @@ async fn fetch_profile_arn(
     let machine_id = machine_id::generate_from_credentials(credentials, config);
     let kiro_version = &config.kiro_version;
 
-    let url = format!("https://{}/listAvailableProfiles?origin=AI_EDITOR", host);
+    // 注意：操作名是大驼峰 /ListAvailableProfiles（全小写会返回 UnknownOperationException），
+    // 且必须用 POST + 空 JSON 请求体
+    let url = format!("https://{}/ListAvailableProfiles?origin=AI_EDITOR", host);
 
     let user_agent = format!(
         "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.0 m/N,E KiroIDE-{}-{}",
@@ -372,14 +374,16 @@ async fn fetch_profile_arn(
 
     let client = build_client(proxy, 60, config.tls_backend)?;
     let response = client
-        .get(&url)
+        .post(&url)
         .header("x-amz-user-agent", &amz_user_agent)
         .header("user-agent", &user_agent)
         .header("host", &host)
+        .header("Content-Type", "application/json")
         .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
         .header("amz-sdk-request", "attempt=1; max=1")
         .header("Authorization", format!("Bearer {}", token))
         .header("Connection", "close")
+        .body("{}")
         .send()
         .await?;
 
