@@ -411,7 +411,13 @@ pub(crate) async fn get_usage_limits(
     let region = credentials.effective_api_region(config);
     let host = format!("q.{}.amazonaws.com", region);
     let machine_id = machine_id::generate_from_credentials(credentials, config);
-    let kiro_version = &config.kiro_version;
+
+    // getUsageLimits 与 generateAssistantResponse 的版本闸门行为不同：
+    // - 0.11.107：额度查询允许无 profileArn，generate 已被版本封禁
+    // - >= 0.11.133：generate 放行，但额度查询强制 profileArn
+    //   （KIRO FREE 账号调 ListAvailableProfiles 是 403 无权限，拿不到 ARN）
+    // 因此额度查询固定用旧版本号，绕开 profileArn 校验。
+    let kiro_version = "0.11.107";
     let os_name = &config.system_version;
     let node_version = &config.node_version;
 
