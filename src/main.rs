@@ -201,6 +201,14 @@ async fn main() {
     // 健康检查端点（不鉴权，供 Railway / Docker / K8s 探活）
     let app = app.route("/health", axum::routing::get(health));
 
+    // 根路径：启用 Admin UI 时跳转过去，否则给一行纯文本说明
+    // 上游没有根路由，PaaS 上直接访问域名会得到一个像"服务挂了"的 404，容易误判
+    let app = if admin_key_valid {
+        app.route("/", axum::routing::get(|| async { axum::response::Redirect::temporary("/admin") }))
+    } else {
+        app.route("/", axum::routing::get(root_info))
+    };
+
     // 启动服务器
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("启动 Anthropic API 端点: {}", addr);
@@ -228,4 +236,9 @@ async fn main() {
 /// 健康检查：仅表示进程存活，不校验上游凭据是否可用
 async fn health() -> &'static str {
     "ok"
+}
+
+/// 根路径说明（未启用 Admin UI 时的兜底，避免域名根路径返回 404）
+async fn root_info() -> &'static str {
+    "kiro.rs is running\nPOST /v1/messages\nGET  /v1/models\nGET  /health\n"
 }
