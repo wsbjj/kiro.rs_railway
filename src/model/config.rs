@@ -137,8 +137,11 @@ fn default_region() -> String {
 fn default_kiro_version() -> String {
     // Kiro 官方自 2026-11-09 起拒绝 IDE < 0.11.133 的连接
     // （403 FEATURE_NOT_SUPPORTED: This version of Kiro is no longer supported）
-    // 故默认值跟进当前 IDE 版本，可用环境变量 KIRO_VERSION 覆盖，无需重新编译
-    "1.4.121".to_string()
+    // 注意：不能盲目跟进 1.x。getUsageLimits 用的是另一套 UA
+    // （api/codewhispererruntime#1.0.0），版本号填 1.x 会被后端 400 拒掉，
+    // 导致管理面板的"导入/验活"全部失败。0.11.133 是同时满足两侧的下限。
+    // 可用环境变量 KIRO_VERSION 覆盖，无需重新编译。
+    "0.11.133".to_string()
 }
 
 fn default_system_version() -> String {
