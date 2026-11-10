@@ -99,6 +99,10 @@ pub struct AddCredentialRequest {
     /// OIDC Client Secret（IdC 认证需要）
     pub client_secret: Option<String>,
 
+    /// AWS Profile ARN（企业 IdC 账号必填；generateAssistantResponse 与
+    /// getUsageLimits 对 IdC 凭据强制校验，缺失时报 400）
+    pub profile_arn: Option<String>,
+
     /// 优先级（可选，默认 0）
     #[serde(default)]
     pub priority: u32,
