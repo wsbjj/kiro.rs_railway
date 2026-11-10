@@ -300,7 +300,8 @@ async fn refresh_idc_token(
     let data: IdcRefreshResponse = response.json().await?;
 
     let mut new_credentials = credentials.clone();
-    new_credentials.access_token = Some(data.access_token);
+    let access_token = data.access_token;
+    new_credentials.access_token = Some(access_token.clone());
 
     if let Some(new_refresh_token) = data.refresh_token {
         new_credentials.refresh_token = Some(new_refresh_token);
@@ -316,7 +317,81 @@ async fn refresh_idc_token(
         new_credentials.profile_arn = Some(profile_arn);
     }
 
+    // IdC 刷新接口并不总是返回 profileArn，但上游 generateAssistantResponse /
+    // getUsageLimits 对企业 IdC 账号强制要求它，缺失时报 400 Invalid profileArn。
+    // 面板导入的账号无从填写，这里在刷新后按需拉取一次。
+    if new_credentials.profile_arn.is_none() {
+        match fetch_profile_arn(&new_credentials, config, &access_token, proxy).await {
+            Ok(Some(arn)) => {
+                tracing::info!("已自动补齐 profileArn: {}", arn);
+                new_credentials.profile_arn = Some(arn);
+            }
+            Ok(None) => tracing::debug!("listAvailableProfiles 未返回可用 profileArn"),
+            Err(e) => tracing::warn!("自动获取 profileArn 失败: {}", e),
+        }
+    }
+
     Ok(new_credentials)
+}
+
+/// 调用 listAvailableProfiles 获取账号可用的 profileArn
+///
+/// 企业 IdC 账号缺少 profileArn 时上游会直接拒绝请求，而刷新接口未必返回它。
+/// 这里取第一个可用 profile；拿不到就返回 None，不阻断刷新流程。
+async fn fetch_profile_arn(
+    credentials: &KiroCredentials,
+    config: &Config,
+    token: &str,
+    proxy: Option<&ProxyConfig>,
+) -> anyhow::Result<Option<String>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ProfilesResponse {
+        #[serde(default)]
+        profiles: Vec<ProfileInfo>,
+    }
+
+    #[derive(Deserialize)]
+    struct ProfileInfo {
+        #[serde(default)]
+        arn: Option<String>,
+    }
+
+    let region = credentials.effective_api_region(config);
+    let host = format!("q.{}.amazonaws.com", region);
+    let machine_id = machine_id::generate_from_credentials(credentials, config);
+    let kiro_version = &config.kiro_version;
+
+    let url = format!("https://{}/listAvailableProfiles?origin=AI_EDITOR", host);
+
+    let user_agent = format!(
+        "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.0 m/N,E KiroIDE-{}-{}",
+        config.system_version, config.node_version, kiro_version, machine_id
+    );
+    let amz_user_agent = format!("aws-sdk-js/1.0.0 KiroIDE-{}-{}", kiro_version, machine_id);
+
+    let client = build_client(proxy, 60, config.tls_backend)?;
+    let response = client
+        .get(&url)
+        .header("x-amz-user-agent", &amz_user_agent)
+        .header("user-agent", &user_agent)
+        .header("host", &host)
+        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
+        .header("amz-sdk-request", "attempt=1; max=1")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Connection", "close")
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await.unwrap_or_default();
+        tracing::warn!("listAvailableProfiles 调用失败: {} {}", status, body_text);
+        return Ok(None);
+    }
+
+    let data: ProfilesResponse = response.json().await?;
+    Ok(data.profiles.into_iter().find_map(|profile| profile.arn))
 }
 
 /// 获取使用额度信息
