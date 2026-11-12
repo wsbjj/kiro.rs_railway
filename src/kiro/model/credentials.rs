@@ -10,6 +10,13 @@ use std::path::Path;
 use crate::http_client::ProxyConfig;
 use crate::model::config::Config;
 
+/// Builder ID / 免费版 IdC 凭据的默认占位 Profile ARN
+///
+/// 官方 Kiro IDE 为 Builder ID 账号内置该固定值；
+/// 当 `ListAvailableProfiles` 返回 403 或无可用 profile 时回退使用。
+pub const DEFAULT_BUILDER_ID_PROFILE_ARN: &str =
+    "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX";
+
 /// Kiro OAuth 凭证
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -170,6 +177,7 @@ impl CredentialsConfig {
         match self {
             CredentialsConfig::Single(mut cred) => {
                 cred.canonicalize_auth_method();
+                cred.normalize_profile_arn();
                 vec![cred]
             }
             CredentialsConfig::Multiple(mut creds) => {
@@ -177,6 +185,7 @@ impl CredentialsConfig {
                 creds.sort_by_key(|c| c.priority);
                 for cred in &mut creds {
                     cred.canonicalize_auth_method();
+                    cred.normalize_profile_arn();
                 }
                 creds
             }
@@ -271,6 +280,47 @@ impl KiroCredentials {
                 .as_deref()
                 .map(|m| m.eq_ignore_ascii_case("api_key") || m.eq_ignore_ascii_case("apikey"))
                 .unwrap_or(false)
+    }
+
+    /// 规范化 profileArn：去除首尾空白，空字符串视为 None
+    pub fn normalize_profile_arn(&mut self) {
+        let normalized = self
+            .profile_arn
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        self.profile_arn = normalized;
+    }
+
+    /// 判断是否为 IdC / Builder ID / IAM 类凭据
+    pub fn is_idc_credential(&self) -> bool {
+        if self.is_api_key_credential() {
+            return false;
+        }
+
+        match self.auth_method.as_deref() {
+            Some(method) => {
+                method.eq_ignore_ascii_case("idc")
+                    || method.eq_ignore_ascii_case("builder-id")
+                    || method.eq_ignore_ascii_case("iam")
+            }
+            None => self.client_id.is_some() && self.client_secret.is_some(),
+        }
+    }
+
+    /// 为缺少 profileArn 的 IdC 凭据补齐默认占位 Profile ARN
+    ///
+    /// 仅当凭据为 IdC 类且当前无有效 profileArn 时生效；已有值或非 IdC 凭据保持不变。
+    /// 返回值表示是否写入了默认值。
+    pub fn ensure_default_profile_arn(&mut self) -> bool {
+        self.normalize_profile_arn();
+        if self.is_idc_credential() && self.profile_arn.is_none() {
+            self.profile_arn = Some(DEFAULT_BUILDER_ID_PROFILE_ARN.to_string());
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -869,5 +919,60 @@ mod tests {
         let creds = KiroCredentials::default();
         let result = creds.effective_proxy(None);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_ensure_default_profile_arn_for_idc_and_aliases() {
+        for method in ["idc", "builder-id", "IAM"] {
+            let mut creds = KiroCredentials::default();
+            creds.auth_method = Some(method.to_string());
+            creds.profile_arn = Some("   ".to_string());
+
+            assert!(creds.is_idc_credential());
+            assert!(creds.ensure_default_profile_arn());
+            assert_eq!(
+                creds.profile_arn.as_deref(),
+                Some(DEFAULT_BUILDER_ID_PROFILE_ARN)
+            );
+        }
+    }
+
+    #[test]
+    fn test_ensure_default_profile_arn_inferred_idc_without_auth_method() {
+        let mut creds = KiroCredentials::default();
+        creds.client_id = Some("cid".to_string());
+        creds.client_secret = Some("csec".to_string());
+
+        assert!(creds.is_idc_credential());
+        assert!(creds.ensure_default_profile_arn());
+        assert_eq!(
+            creds.profile_arn.as_deref(),
+            Some(DEFAULT_BUILDER_ID_PROFILE_ARN)
+        );
+    }
+
+    #[test]
+    fn test_ensure_default_profile_arn_preserves_explicit_and_skips_non_idc() {
+        let mut idc_with_arn = KiroCredentials::default();
+        idc_with_arn.auth_method = Some("idc".to_string());
+        idc_with_arn.profile_arn = Some("  arn:aws:codewhisperer:us-east-1:123:profile/CUSTOM  ".to_string());
+        assert!(!idc_with_arn.ensure_default_profile_arn());
+        assert_eq!(
+            idc_with_arn.profile_arn.as_deref(),
+            Some("arn:aws:codewhisperer:us-east-1:123:profile/CUSTOM")
+        );
+
+        let mut social = KiroCredentials::default();
+        social.auth_method = Some("social".to_string());
+        assert!(!social.is_idc_credential());
+        assert!(!social.ensure_default_profile_arn());
+        assert!(social.profile_arn.is_none());
+
+        let mut api_key = KiroCredentials::default();
+        api_key.auth_method = Some("api_key".to_string());
+        api_key.kiro_api_key = Some("ksk_test".to_string());
+        assert!(!api_key.is_idc_credential());
+        assert!(!api_key.ensure_default_profile_arn());
+        assert!(api_key.profile_arn.is_none());
     }
 }

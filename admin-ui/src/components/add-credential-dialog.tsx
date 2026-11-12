@@ -27,6 +27,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
   const [apiRegion, setApiRegion] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
+  const [profileArn, setProfileArn] = useState('')
   const [priority, setPriority] = useState('0')
   const [machineId, setMachineId] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
@@ -44,6 +45,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
     setApiRegion('')
     setClientId('')
     setClientSecret('')
+    setProfileArn('')
     setPriority('0')
     setMachineId('')
     setProxyUrl('')
@@ -84,6 +86,7 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
         apiRegion: apiRegion.trim() || undefined,
         clientId: isApiKey ? undefined : clientId.trim() || undefined,
         clientSecret: isApiKey ? undefined : clientSecret.trim() || undefined,
+        profileArn: authMethod === 'idc' ? profileArn.trim() || undefined : undefined,
         priority: parseInt(priority) || 0,
         machineId: machineId.trim() || undefined,
         proxyUrl: proxyUrl.trim() || undefined,
@@ -220,6 +223,21 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
                     onChange={(e) => setClientSecret(e.target.value)}
                     disabled={isPending}
                   />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="profileArn" className="text-sm font-medium">
+                    Profile ARN
+                  </label>
+                  <Input
+                    id="profileArn"
+                    placeholder="留空自动获取，失败时使用默认 Profile ARN"
+                    value={profileArn}
+                    onChange={(e) => setProfileArn(e.target.value)}
+                    disabled={isPending}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    可选。留空时会先向 Kiro 查询可用 Profile，查不到则自动补齐默认占位 Profile ARN
+                  </p>
                 </div>
               </>
             )}

@@ -18,7 +18,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::http_client::{ProxyConfig, build_client};
 use crate::kiro::machine_id;
-use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::model::credentials::{DEFAULT_BUILDER_ID_PROFILE_ARN, KiroCredentials};
 use crate::kiro::model::token_refresh::{
     IdcRefreshRequest, IdcRefreshResponse, RefreshRequest, RefreshResponse,
 };
@@ -118,20 +118,8 @@ pub(crate) async fn refresh_token(
 
     validate_refresh_token(credentials)?;
 
-    // 根据 auth_method 选择刷新方式
-    // 如果未指定 auth_method，根据是否有 clientId/clientSecret 自动判断
-    let auth_method = credentials.auth_method.as_deref().unwrap_or_else(|| {
-        if credentials.client_id.is_some() && credentials.client_secret.is_some() {
-            "idc"
-        } else {
-            "social"
-        }
-    });
-
-    if auth_method.eq_ignore_ascii_case("idc")
-        || auth_method.eq_ignore_ascii_case("builder-id")
-        || auth_method.eq_ignore_ascii_case("iam")
-    {
+    // 根据凭据认证方式选择刷新路径
+    if credentials.is_idc_credential() {
         refresh_idc_token(credentials, config, proxy).await
     } else {
         refresh_social_token(credentials, config, proxy).await
@@ -209,7 +197,11 @@ async fn refresh_social_token(
         new_credentials.refresh_token = Some(new_refresh_token);
     }
 
-    if let Some(profile_arn) = data.profile_arn {
+    if let Some(profile_arn) = data
+        .profile_arn
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
         new_credentials.profile_arn = Some(profile_arn);
     }
 
@@ -313,25 +305,67 @@ async fn refresh_idc_token(
     }
 
     // 同步更新 profile_arn（如果 IdC 响应中包含）
-    if let Some(profile_arn) = data.profile_arn {
+    new_credentials.normalize_profile_arn();
+    if let Some(profile_arn) = data
+        .profile_arn
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
         new_credentials.profile_arn = Some(profile_arn);
     }
 
     // IdC 刷新接口并不总是返回 profileArn，但上游 generateAssistantResponse /
     // getUsageLimits 对企业 IdC 账号强制要求它，缺失时报 400 Invalid profileArn。
-    // 面板导入的账号无从填写，这里在刷新后按需拉取一次。
+    // 先尝试通过 ListAvailableProfiles 拉取真实企业 ARN；拿不到（例如 Builder ID /
+    // 免费版账号返回 403）时，回退使用默认占位 profileArn，避免后续请求全部报 400。
     if new_credentials.profile_arn.is_none() {
-        match fetch_profile_arn(&new_credentials, config, &access_token, proxy).await {
-            Ok(Some(arn)) => {
-                tracing::info!("已自动补齐 profileArn: {}", arn);
-                new_credentials.profile_arn = Some(arn);
-            }
-            Ok(None) => tracing::debug!("listAvailableProfiles 未返回可用 profileArn"),
-            Err(e) => tracing::warn!("自动获取 profileArn 失败: {}", e),
-        }
+        let fetched = fetch_profile_arn(&new_credentials, config, &access_token, proxy).await;
+        resolve_idc_profile_arn_after_fetch(&mut new_credentials, fetched);
     }
 
     Ok(new_credentials)
+}
+
+/// 处理 ListAvailableProfiles 查询结果：优先采用真实 ARN，否则回退默认占位 profileArn
+fn resolve_idc_profile_arn_after_fetch(
+    credentials: &mut KiroCredentials,
+    fetched: anyhow::Result<Option<String>>,
+) {
+    credentials.normalize_profile_arn();
+    if credentials.profile_arn.is_some() {
+        return;
+    }
+
+    match fetched {
+        Ok(Some(arn)) => {
+            let trimmed = arn.trim();
+            if !trimmed.is_empty() {
+                tracing::info!("已自动补齐 profileArn: {}", trimmed);
+                credentials.profile_arn = Some(trimmed.to_string());
+                return;
+            }
+            if credentials.ensure_default_profile_arn() {
+                tracing::info!(
+                    "listAvailableProfiles 返回空 profileArn，已回退使用默认 profileArn"
+                );
+            }
+        }
+        Ok(None) => {
+            if credentials.ensure_default_profile_arn() {
+                tracing::info!(
+                    "listAvailableProfiles 未返回可用 profileArn，已回退使用默认 profileArn"
+                );
+            }
+        }
+        Err(e) => {
+            if credentials.ensure_default_profile_arn() {
+                tracing::warn!(
+                    "自动获取 profileArn 失败（{}），已回退使用默认 profileArn",
+                    e
+                );
+            }
+        }
+    }
 }
 
 /// 调用 listAvailableProfiles 获取账号可用的 profileArn
@@ -395,7 +429,12 @@ async fn fetch_profile_arn(
     }
 
     let data: ProfilesResponse = response.json().await?;
-    Ok(data.profiles.into_iter().find_map(|profile| profile.arn))
+    Ok(data
+        .profiles
+        .into_iter()
+        .find_map(|profile| profile.arn)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
 }
 
 /// 获取使用额度信息
@@ -653,12 +692,14 @@ impl MultiTokenManager {
         let mut next_id = max_existing_id + 1;
         let mut has_new_ids = false;
         let mut has_new_machine_ids = false;
+        let mut has_new_profile_arns = false;
         let config_ref = &config;
 
         let entries: Vec<CredentialEntry> = credentials
             .into_iter()
             .map(|mut cred| {
                 cred.canonicalize_auth_method();
+                cred.normalize_profile_arn();
                 let id = cred.id.unwrap_or_else(|| {
                     let id = next_id;
                     next_id += 1;
@@ -670,6 +711,10 @@ impl MultiTokenManager {
                     cred.machine_id =
                         Some(machine_id::generate_from_credentials(&cred, config_ref));
                     has_new_machine_ids = true;
+                }
+                // 未过期且无 profileArn 的 IdC 凭据启动时不会触发刷新，直接补齐默认值避免请求报 400
+                if !is_token_expired(&cred) && cred.ensure_default_profile_arn() {
+                    has_new_profile_arns = true;
                 }
                 CredentialEntry {
                     id,
@@ -742,12 +787,12 @@ impl MultiTokenManager {
             stats_dirty: AtomicBool::new(false),
         };
 
-        // 如果有新分配的 ID 或新生成的 machineId，立即持久化到配置文件
-        if has_new_ids || has_new_machine_ids {
+        // 如果有新分配的 ID、新生成的 machineId 或补齐的默认 profileArn，立即持久化到配置文件
+        if has_new_ids || has_new_machine_ids || has_new_profile_arns {
             if let Err(e) = manager.persist_credentials() {
-                tracing::warn!("补全凭据 ID/machineId 后持久化失败: {}", e);
+                tracing::warn!("补全凭据 ID/machineId/profileArn 后持久化失败: {}", e);
             } else {
-                tracing::info!("已补全凭据 ID/machineId 并写回配置文件");
+                tracing::info!("已补全凭据 ID/machineId/profileArn 并写回配置文件");
             }
         }
 
@@ -1830,6 +1875,7 @@ impl MultiTokenManager {
         validated_cred.proxy_username = new_cred.proxy_username;
         validated_cred.proxy_password = new_cred.proxy_password;
         validated_cred.kiro_api_key = new_cred.kiro_api_key;
+        validated_cred.ensure_default_profile_arn();
 
         {
             let mut entries = self.entries.lock();
@@ -2680,5 +2726,92 @@ mod tests {
 
         assert_eq!(credentials.effective_auth_region(&config), "auth-only");
         assert_eq!(credentials.effective_api_region(&config), "api-only");
+    }
+
+    #[test]
+    fn test_resolve_idc_profile_arn_after_fetch_fallbacks_and_preserves() {
+        let mut cred_none = KiroCredentials::default();
+        cred_none.auth_method = Some("idc".to_string());
+        resolve_idc_profile_arn_after_fetch(&mut cred_none, Ok(None));
+        assert_eq!(
+            cred_none.profile_arn.as_deref(),
+            Some(DEFAULT_BUILDER_ID_PROFILE_ARN)
+        );
+
+        let mut cred_err = KiroCredentials::default();
+        cred_err.auth_method = Some("idc".to_string());
+        resolve_idc_profile_arn_after_fetch(&mut cred_err, Err(anyhow::anyhow!("403 Forbidden")));
+        assert_eq!(
+            cred_err.profile_arn.as_deref(),
+            Some(DEFAULT_BUILDER_ID_PROFILE_ARN)
+        );
+
+        let mut cred_enterprise = KiroCredentials::default();
+        cred_enterprise.auth_method = Some("idc".to_string());
+        resolve_idc_profile_arn_after_fetch(
+            &mut cred_enterprise,
+            Ok(Some("  arn:aws:codewhisperer:us-east-1:999:profile/ENT123  ".to_string())),
+        );
+        assert_eq!(
+            cred_enterprise.profile_arn.as_deref(),
+            Some("arn:aws:codewhisperer:us-east-1:999:profile/ENT123")
+        );
+    }
+
+    #[test]
+    fn test_multi_token_manager_backfills_default_profile_arn_for_unexpired_idc() {
+        let temp_dir = std::env::temp_dir();
+        let creds_path = temp_dir.join(format!(
+            "test_kiro_creds_profile_arn_{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let future_exp = (Utc::now() + Duration::hours(1)).to_rfc3339();
+
+        let mut idc_missing_arn = KiroCredentials::default();
+        idc_missing_arn.id = Some(1);
+        idc_missing_arn.auth_method = Some("idc".to_string());
+        idc_missing_arn.access_token = Some("valid-idc-token".to_string());
+        idc_missing_arn.expires_at = Some(future_exp.clone());
+
+        let mut idc_custom_arn = KiroCredentials::default();
+        idc_custom_arn.id = Some(2);
+        idc_custom_arn.auth_method = Some("idc".to_string());
+        idc_custom_arn.profile_arn = Some("arn:aws:codewhisperer:us-east-1:999:profile/CUSTOM".to_string());
+        idc_custom_arn.access_token = Some("valid-idc-token-2".to_string());
+        idc_custom_arn.expires_at = Some(future_exp.clone());
+
+        let mut social_missing_arn = KiroCredentials::default();
+        social_missing_arn.id = Some(3);
+        social_missing_arn.auth_method = Some("social".to_string());
+        social_missing_arn.access_token = Some("valid-social-token".to_string());
+        social_missing_arn.expires_at = Some(future_exp);
+
+        let manager = MultiTokenManager::new(
+            Config::default(),
+            vec![idc_missing_arn, idc_custom_arn, social_missing_arn],
+            None,
+            Some(creds_path.clone()),
+            true,
+        )
+        .unwrap();
+
+        let snap = manager.snapshot();
+        assert!(snap.entries.iter().find(|e| e.id == 1).unwrap().has_profile_arn);
+        assert!(snap.entries.iter().find(|e| e.id == 2).unwrap().has_profile_arn);
+        assert!(!snap.entries.iter().find(|e| e.id == 3).unwrap().has_profile_arn);
+
+        let written = std::fs::read_to_string(&creds_path).unwrap();
+        let parsed: Vec<KiroCredentials> = serde_json::from_str(&written).unwrap();
+        assert_eq!(
+            parsed[0].profile_arn.as_deref(),
+            Some(DEFAULT_BUILDER_ID_PROFILE_ARN)
+        );
+        assert_eq!(
+            parsed[1].profile_arn.as_deref(),
+            Some("arn:aws:codewhisperer:us-east-1:999:profile/CUSTOM")
+        );
+        assert!(parsed[2].profile_arn.is_none());
+
+        let _ = std::fs::remove_file(&creds_path);
     }
 }
